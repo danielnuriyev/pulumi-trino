@@ -129,6 +129,22 @@ pulumi up --yes --stack dev
 | MinIO API | http://localhost:9000 |
 | MinIO Console | http://localhost:9001 |
 
+### Port Forward to Trino UI and MinIO UI
+
+If the NodePort mappings aren't working or you need direct access to the Trino coordinator, use kubectl port-forward:
+
+```bash
+kubectl port-forward -n trino svc/trino 8080:8080
+```
+
+Then open http://localhost:8080 in your browser.
+
+To port-forward MinIO Console:
+
+```bash
+kubectl port-forward -n trino svc/minio 9001:9001
+```
+
 ### Connect to Trino
 
 Using Docker:
