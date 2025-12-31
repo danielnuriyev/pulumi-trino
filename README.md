@@ -38,6 +38,14 @@ pulumi login file://~
 
 This stores Pulumi state locally instead of in Pulumi Cloud.
 
+Set your Pulumi passphrase as an environment variable (add to your `~/.zshrc` or `~/.bashrc`):
+
+```bash
+export PULUMI_CONFIG_PASSPHRASE="your-secure-passphrase"
+```
+
+This passphrase encrypts your Pulumi secrets. Use the same passphrase consistently.
+
 ### 5. Create the Kind Cluster
 
 Create a file `kind-config.yaml` in the parent directory:
@@ -84,20 +92,33 @@ uv sync
 If this is a fresh clone, initialize the dev stack:
 
 ```bash
-PULUMI_CONFIG_PASSPHRASE="" pulumi stack init dev
+pulumi stack init dev
 ```
 
 ### 8. Set Required Secrets
 
+Before deploying, you must set passwords for MinIO and PostgreSQL. These are stored as encrypted secrets in `Pulumi.dev.yaml`.
+
 ```bash
-PULUMI_CONFIG_PASSPHRASE="" pulumi config set --secret minioPassword "your-minio-password"
-PULUMI_CONFIG_PASSPHRASE="" pulumi config set --secret pgPassword "your-postgres-password"
+# Set MinIO root password (used for S3-compatible object storage)
+pulumi config set --secret minioPassword "your-minio-password"
+
+# Set PostgreSQL password (used by Hive Metastore for metadata storage)
+pulumi config set --secret pgPassword "your-postgres-password"
 ```
+
+To verify your secrets are set:
+
+```bash
+pulumi config
+```
+
+You should see `minioPassword` and `pgPassword` listed as `[secret]`.
 
 ## Deploy
 
 ```bash
-PULUMI_CONFIG_PASSPHRASE="" pulumi up --yes --stack dev
+pulumi up --yes --stack dev
 ```
 
 ## Access Services
@@ -150,7 +171,7 @@ SELECT * FROM lakehouse.test.test;
 Destroy all resources:
 
 ```bash
-PULUMI_CONFIG_PASSPHRASE="" pulumi destroy --yes --stack dev
+pulumi destroy --yes --stack dev
 ```
 
 Delete the Kind cluster:
