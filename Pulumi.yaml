@@ -1,0 +1,6 @@
+name: pulumi-trino
+description: deploy trino to k8s using pulumi
+runtime:
+  name: python
+  options:
+    toolchain: uv

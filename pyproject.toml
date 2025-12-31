@@ -1,0 +1,10 @@
+[project]
+name = "pulumi-trino"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pulumi>=3.214.0",
+    "pulumi-kubernetes>=4.24.1",
+]
