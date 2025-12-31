@@ -1,6 +1,7 @@
 # Trino on Kubernetes with Pulumi
 
-Deploy Trino, MinIO, PostgreSQL, and Hive Metastore to a local Kubernetes cluster using Pulumi.
+Deploy Trino to local Kubernetes cluster created with `kind` using pulumi.
+The deployment uses Hive Metastore that stores schema in Postgres and files on S3 using MinIO.
 
 ## Architecture
 
