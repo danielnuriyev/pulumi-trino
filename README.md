@@ -59,6 +59,8 @@ nodes:
     extraPortMappings:
       - containerPort: 30080
         hostPort: 8080   # Trino
+      - containerPort: 19120
+        hostPort: 19120  # Nessie
       - containerPort: 30900
         hostPort: 9000   # MinIO API
       - containerPort: 30901
