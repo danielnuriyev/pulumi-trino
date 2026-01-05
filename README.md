@@ -1,14 +1,14 @@
 # Trino on Kubernetes with Pulumi
 
 Deploy Trino to local Kubernetes cluster created with `kind` using pulumi.
-The deployment uses Hive Metastore that stores schema in Postgres and files on S3 using MinIO.
+The deployment uses Nessie as the Iceberg catalog with Git-like versioning capabilities, storing metadata in Postgres and files on S3 using MinIO.
 
 ## Architecture
 
 - **Trino** - Distributed SQL query engine (1 coordinator + 3 workers)
+- **Nessie** - Iceberg catalog server with Git-like branching and versioning
 - **MinIO** - S3-compatible object storage for Iceberg data
-- **PostgreSQL 17** - Metadata storage for Hive Metastore
-- **Apache Hive Metastore 4.0.1** - Iceberg catalog backend
+- **PostgreSQL 17** - Metadata storage for Nessie
 
 ## Prerequisites
 
@@ -123,26 +123,68 @@ pulumi up --yes --stack dev
 
 ## Access Services
 
-| Service | URL |
-|---------|-----|
-| Trino UI | http://localhost:8080 |
-| MinIO API | http://localhost:9000 |
-| MinIO Console | http://localhost:9001 |
+**Direct NodePort Access** (when Kind cluster port mappings work):
+| Service | URL | Notes |
+|---------|-----|-------|
+| Trino UI | http://localhost:8080 | Via NodePort 30080 |
+| Nessie UI | http://localhost:19120 | Via NodePort 19120 |
+| MinIO API | http://localhost:9000 | Via NodePort 30900 |
+| MinIO Console | http://localhost:9001 | Via NodePort 30901 |
 
-### Port Forward to Trino UI and MinIO UI
+**Port Forwarding** (recommended for reliable access): See below for commands.
 
-If the NodePort mappings aren't working or you need direct access to the Trino coordinator, use kubectl port-forward:
+### Port Forward to Services
+
+Helm releases automatically prefix service names with the release name. To find the correct service names, run:
 
 ```bash
-kubectl port-forward -n trino svc/trino 8080:8080
+kubectl get services -n trino
+```
+
+Example output:
+```
+NAME                          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+hive-metastore                ClusterIP   10.96.230.58    <none>        9083/TCP         22m
+minio-ec2bcee8                NodePort    10.96.86.91     <none>        9000:30900/TCP   55m
+minio-ec2bcee8-console        NodePort    10.96.162.184   <none>        9001:30901/TCP   55m
+nessie                        ClusterIP   10.96.26.56     <none>        19120/TCP        22m
+postgres                      ClusterIP   10.96.240.155   <none>        5432/TCP         55m
+trino-0a966bea-trino          NodePort    10.96.48.115    <none>        8080:30080/TCP   22m
+```
+
+This shows services like:
+- `trino-<release-name>-trino` (for Trino coordinator, e.g., `trino-0a966bea-trino`)
+- `minio-<release-name>-console` (for MinIO Console, e.g., `minio-ec2bcee8-console`)
+- `nessie` (for Nessie - no prefix since it's deployed directly, not via Helm)
+
+#### Port Forward to Trino UI
+
+If the NodePort mappings aren't working or you need direct access to the Trino coordinator:
+
+```bash
+# Find the correct Trino service name (usually trino-<random-id>-trino)
+kubectl get services -n trino | grep trino
+
+# Port-forward the service (example with actual service name)
+kubectl port-forward -n trino svc/trino-0a966bea-trino 8080:8080
 ```
 
 Then open http://localhost:8080 in your browser.
 
-To port-forward MinIO Console:
+#### Port Forward to Nessie UI
 
 ```bash
-kubectl port-forward -n trino svc/minio 9001:9001
+kubectl port-forward -n trino svc/nessie 19120:19120
+```
+
+#### Port Forward to MinIO Console
+
+```bash
+# Find the correct MinIO console service name (usually minio-<random-id>-console)
+kubectl get services -n trino | grep minio
+
+# Port-forward the service (example with actual service name)
+kubectl port-forward -n trino svc/minio-ec2bcee8-console 9001:9001
 ```
 
 ### Connect to Trino
@@ -166,7 +208,16 @@ trino --server http://localhost:8080
 -- List catalogs
 SHOW CATALOGS;
 
--- Create a schema
+-- List available Nessie branches
+SELECT * FROM lakehouse.information_schema.nessie_branches;
+
+-- Create a development branch (requires Nessie CLI or REST API)
+-- Use: nessie branch create dev
+
+-- Switch to a branch (use Nessie CLI: nessie branch use dev)
+-- Or set branch in session: SET SESSION iceberg.nessie.branch = 'dev';
+
+-- Create a schema on the main branch
 CREATE SCHEMA lakehouse.test WITH (location = 's3a://warehouse/iceberg/test');
 
 -- Create an Iceberg table
@@ -180,6 +231,43 @@ INSERT INTO lakehouse.test.test VALUES (1, current_timestamp);
 
 -- Query data
 SELECT * FROM lakehouse.test.test;
+
+-- Show table history (Nessie versioning)
+SELECT * FROM lakehouse.information_schema.nessie_table_history
+WHERE namespace = 'test' AND table_name = 'test';
+```
+
+### Working with Nessie Branches
+
+Nessie provides Git-like branching and versioning for your Iceberg tables. To use advanced branching features, install the Nessie CLI:
+
+```bash
+# Download and install Nessie CLI
+curl -L https://github.com/projectnessie/nessie/releases/latest/download/nessie-cli.jar -o nessie-cli.jar
+java -jar nessie-cli.jar --help
+```
+
+Connect to your Nessie instance:
+
+```bash
+# Set the Nessie endpoint
+export NESSIE_URI=http://localhost:19120/api/v1
+
+# List branches
+nessie branch
+
+# Create a new branch
+nessie branch create feature/new-table
+
+# Switch to a branch
+nessie branch use feature/new-table
+
+# Create tables on specific branches
+nessie branch use feature/new-table
+# Then run your CREATE TABLE statements in Trino
+
+# Merge branches (requires setting up merge rules)
+nessie merge main
 ```
 
 ## Cleanup
@@ -207,13 +295,13 @@ kubectl get pods -n trino
 ### View logs
 
 ```bash
-kubectl logs -n trino deployment/hive-metastore
+kubectl logs -n trino deployment/nessie
 kubectl logs -n trino deployment/postgres
 ```
 
 ### Restart a deployment
 
 ```bash
-kubectl rollout restart deployment/hive-metastore -n trino
+kubectl rollout restart deployment/nessie -n trino
 ```
 

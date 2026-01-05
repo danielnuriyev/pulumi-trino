@@ -4,6 +4,7 @@ import pulumi_kubernetes as k8s
 cfg = pulumi.Config()
 
 ns_name = cfg.get("namespace") or "trino"
+ns = k8s.core.v1.Namespace("ns", metadata={"name": ns_name})
 
 minio_user = cfg.get("minioUser") or "admin"
 minio_pass = cfg.require_secret("minioPassword")
@@ -12,14 +13,15 @@ pg_user = cfg.get("pgUser") or "metastore"
 pg_pass = cfg.require_secret("pgPassword")
 pg_db   = cfg.get("pgDb") or "metastore"
 
-ns = k8s.core.v1.Namespace("ns", metadata={"name": ns_name})
+# Namespace is created manually
+# ns = k8s.core.v1.Namespace("ns", metadata={"name": ns_name})
 
 # --- Standalone PostgreSQL with md5 auth for Hive Metastore ---
 pg_deploy = k8s.apps.v1.Deployment(
     "postgres",
     metadata=k8s.meta.v1.ObjectMetaArgs(
         name="postgres",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
     ),
     spec=k8s.apps.v1.DeploymentSpecArgs(
         replicas=1,
@@ -44,14 +46,13 @@ pg_deploy = k8s.apps.v1.Deployment(
             ),
         ),
     ),
-    opts=pulumi.ResourceOptions(depends_on=[ns]),
 )
 
 pg_svc = k8s.core.v1.Service(
     "postgres-svc",
     metadata=k8s.meta.v1.ObjectMetaArgs(
         name="postgres",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
     ),
     spec=k8s.core.v1.ServiceSpecArgs(
         selector={"app": "postgres"},
@@ -65,7 +66,7 @@ minio = k8s.helm.v3.Release(
     "minio",
     k8s.helm.v3.ReleaseArgs(
         chart="minio",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
         repository_opts=k8s.helm.v3.RepositoryOptsArgs(
             repo="https://charts.min.io/",
         ),
@@ -83,7 +84,6 @@ minio = k8s.helm.v3.Release(
             "persistence": {"enabled": False},
         },
     ),
-    opts=pulumi.ResourceOptions(depends_on=[ns]),
 )
 
 # --- Hive Metastore with S3 support ---
@@ -94,14 +94,13 @@ hms_secret = k8s.core.v1.Secret(
     "hms-secret",
     metadata=k8s.meta.v1.ObjectMetaArgs(
         name="hive-metastore-secret",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
     ),
     string_data={
         "pg-password": pg_pass,
         "minio-access-key": minio_user,
         "minio-secret-key": minio_pass,
     },
-    opts=pulumi.ResourceOptions(depends_on=[ns]),
 )
 
 # ConfigMap with non-sensitive config using env var substitution
@@ -109,7 +108,7 @@ hms_config = k8s.core.v1.ConfigMap(
     "hms-config",
     metadata=k8s.meta.v1.ObjectMetaArgs(
         name="hive-metastore-config",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
     ),
     data={
         # Hadoop/Hive support ${env.VAR_NAME} for environment variable substitution
@@ -201,14 +200,14 @@ hms_config = k8s.core.v1.ConfigMap(
 """
         ),
     },
-    opts=pulumi.ResourceOptions(depends_on=[ns, minio]),
+    opts=pulumi.ResourceOptions(depends_on=[minio]),
 )
 
 hms_deploy = k8s.apps.v1.Deployment(
     "hive-metastore",
     metadata=k8s.meta.v1.ObjectMetaArgs(
         name="hive-metastore",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
     ),
     spec=k8s.apps.v1.DeploymentSpecArgs(
         replicas=1,
@@ -319,7 +318,7 @@ hms_svc = k8s.core.v1.Service(
     "hive-metastore-svc",
     metadata=k8s.meta.v1.ObjectMetaArgs(
         name="hive-metastore",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
     ),
     spec=k8s.core.v1.ServiceSpecArgs(
         selector={"app": "hive-metastore"},
@@ -328,12 +327,123 @@ hms_svc = k8s.core.v1.Service(
     opts=pulumi.ResourceOptions(depends_on=[hms_deploy]),
 )
 
+# --- Nessie (Iceberg Catalog with Git-like versioning) ---
+nessie_config = k8s.core.v1.ConfigMap(
+    "nessie-config",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="nessie-config",
+        namespace=ns_name,
+    ),
+    data={
+        "application.properties": f"""# Nessie configuration
+quarkus.http.port=19120
+
+nessie.version.store.type=DATABASE
+
+# PostgreSQL configuration for Nessie
+quarkus.datasource.db-kind=postgresql
+quarkus.datasource.username={pg_user}
+quarkus.datasource.password=${{PG_PASSWORD}}
+quarkus.datasource.jdbc.url=jdbc:postgresql://postgres:5432/{pg_db}
+
+# Nessie specific database configuration
+nessie.server.default-branch=main
+nessie.server.send-stacktrace-to-client=false
+""",
+    },
+)
+
+nessie_secret = k8s.core.v1.Secret(
+    "nessie-secret",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="nessie-secret",
+        namespace=ns_name,
+    ),
+    string_data={
+        "pg-password": pg_pass,
+    },
+)
+
+nessie_deploy = k8s.apps.v1.Deployment(
+    "nessie",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="nessie",
+        namespace=ns_name,
+    ),
+    spec=k8s.apps.v1.DeploymentSpecArgs(
+        replicas=1,
+        selector=k8s.meta.v1.LabelSelectorArgs(
+            match_labels={"app": "nessie"},
+        ),
+        template=k8s.core.v1.PodTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(labels={"app": "nessie"}),
+            spec=k8s.core.v1.PodSpecArgs(
+                init_containers=[
+                    # Wait for PostgreSQL to be ready
+                    k8s.core.v1.ContainerArgs(
+                        name="wait-for-postgres",
+                        image="busybox:1.37",
+                        command=["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done;"],
+                    ),
+                ],
+                containers=[
+                    k8s.core.v1.ContainerArgs(
+                        name="nessie",
+                        image="projectnessie/nessie:latest",
+                        ports=[k8s.core.v1.ContainerPortArgs(container_port=19120)],
+                        env=[
+                            k8s.core.v1.EnvVarArgs(
+                                name="PG_PASSWORD",
+                                value_from=k8s.core.v1.EnvVarSourceArgs(
+                                    secret_key_ref=k8s.core.v1.SecretKeySelectorArgs(
+                                        name="nessie-secret",
+                                        key="pg-password",
+                                    ),
+                                ),
+                            ),
+                        ],
+                        volume_mounts=[
+                            k8s.core.v1.VolumeMountArgs(
+                                name="config",
+                                mount_path="/app/config",
+                            ),
+                        ],
+                    )
+                ],
+                volumes=[
+                    k8s.core.v1.VolumeArgs(
+                        name="config",
+                        config_map=k8s.core.v1.ConfigMapVolumeSourceArgs(
+                            name="nessie-config",
+                        ),
+                    ),
+                ],
+            ),
+        ),
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[pg_svc, nessie_config, nessie_secret]),
+)
+
+nessie_svc = k8s.core.v1.Service(
+    "nessie-svc",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="nessie",
+        namespace=ns_name,
+    ),
+    spec=k8s.core.v1.ServiceSpecArgs(
+        selector={"app": "nessie"},
+        ports=[k8s.core.v1.ServicePortArgs(port=19120, target_port=19120)],
+    ),
+    opts=pulumi.ResourceOptions(depends_on=[nessie_deploy]),
+)
+
 # --- Trino ---
 iceberg_catalog = pulumi.Output.all(minio_user, minio_pass, minio.name).apply(
     lambda args: f"""\
 connector.name=iceberg
-iceberg.catalog.type=hive_metastore
-hive.metastore.uri=thrift://hive-metastore:9083
+iceberg.catalog.type=nessie
+iceberg.nessie-catalog.uri=http://nessie:19120/api/v1
+iceberg.nessie-catalog.default-warehouse-dir=s3a://warehouse/iceberg/
 
 fs.native-s3.enabled=true
 s3.endpoint=http://{args[2]}:9000
@@ -348,7 +458,7 @@ trino = k8s.helm.v3.Release(
     "trino",
     k8s.helm.v3.ReleaseArgs(
         chart="trino",
-        namespace=ns.metadata["name"],
+        namespace=ns_name,
         repository_opts=k8s.helm.v3.RepositoryOptsArgs(
             repo="https://trinodb.github.io/charts",
         ),
@@ -361,7 +471,7 @@ trino = k8s.helm.v3.Release(
             },
         },
     ),
-    opts=pulumi.ResourceOptions(depends_on=[minio, hms_svc]),
+    opts=pulumi.ResourceOptions(depends_on=[minio, nessie_svc]),
 )
 
 pulumi.export("trino_url", "http://localhost:30080")
