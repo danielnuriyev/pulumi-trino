@@ -1,6 +1,6 @@
 encryptionsalt: v1:eavwtuesRqY=:v1:77lygwI3jYVwry9w:33xcaRmhPawfoViTZXSIrdY5KPN1lQ==
 config:
   pulumi-trino:minioPassword:
-    secure: v1:aGiyCVRyvtuaF+cw:JdBY6xSyZZMibO8R8V9qlJDgMXFceHQAm2Q=
+    secure: v1:K2Vzvj1Ddazkw+rd:Ziq3J6xlemANhpHysub/dhXFeCy3UTB1bohoqpDtcSFmjQ==
   pulumi-trino:pgPassword:
-    secure: v1:WMtMrs+h56g6olbL:s13ro7hK/L3Y02N05pT95/+JQ/0ibTIf
+    secure: v1:OkF/jjbZNnho0ANF:jHj3ZQJ6XVT4pUdeKE1VHOnXDS/sFMTQbNvmUy+csnKygxH8TQ==

@@ -48,38 +48,24 @@ This passphrase encrypts your Pulumi secrets. Use the same passphrase consistent
 
 ### 5. Create the Kind Cluster
 
-Create a file `kind-config.yaml` in the parent directory:
-
-```yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-name: trino
-nodes:
-  - role: control-plane
-    extraPortMappings:
-      - containerPort: 30080
-        hostPort: 8080   # Trino
-      - containerPort: 19120
-        hostPort: 19120  # Nessie
-      - containerPort: 30900
-        hostPort: 9000   # MinIO API
-      - containerPort: 30901
-        hostPort: 9001   # MinIO Console
-  - role: worker
-  - role: worker
-  - role: worker
-```
-
-Create the cluster:
+This project deploys to the shared `local` kind cluster. Make sure it's running:
 
 ```bash
-kind create cluster --config ../kind-config.yaml
-```
+kind get clusters
+# Should show 'local' in the list
 
-Verify the cluster is running:
+kubectl cluster-info --context kind-local
+# Should show cluster info for the local cluster
 
-```bash
 kubectl get nodes
+# Should show 8 nodes (1 control-plane + 7 workers)
+```
+
+If the cluster doesn't exist, create it using the configuration from the parent directory:
+
+```bash
+# From the parent directory (where kind-config.yaml exists)
+kind create cluster --config kind-config.yaml
 ```
 
 ### 6. Install Python Dependencies
@@ -140,7 +126,7 @@ pulumi up --yes --stack dev
 Helm releases automatically prefix service names with the release name. To find the correct service names, run:
 
 ```bash
-kubectl get services -n trino
+kubectl get services -n trino --context kind-local
 ```
 
 Example output:
@@ -165,10 +151,10 @@ If the NodePort mappings aren't working or you need direct access to the Trino c
 
 ```bash
 # Find the correct Trino service name (usually trino-<random-id>-trino)
-kubectl get services -n trino | grep trino
+kubectl get services -n trino --context kind-local | grep trino
 
 # Port-forward the service (example with actual service name)
-kubectl port-forward -n trino svc/trino-0a966bea-trino 8080:8080
+kubectl port-forward -n trino svc/trino-0a966bea-trino 8080:8080 --context kind-local
 ```
 
 Then open http://localhost:8080 in your browser.
@@ -176,17 +162,17 @@ Then open http://localhost:8080 in your browser.
 #### Port Forward to Nessie UI
 
 ```bash
-kubectl port-forward -n trino svc/nessie 19120:19120
+kubectl port-forward -n trino svc/nessie 19120:19120 --context kind-local
 ```
 
 #### Port Forward to MinIO Console
 
 ```bash
 # Find the correct MinIO console service name (usually minio-<random-id>-console)
-kubectl get services -n trino | grep minio
+kubectl get services -n trino --context kind-local | grep minio
 
 # Port-forward the service (example with actual service name)
-kubectl port-forward -n trino svc/minio-ec2bcee8-console 9001:9001
+kubectl port-forward -n trino svc/minio-ec2bcee8-console 9001:9001 --context kind-local
 ```
 
 ### Connect to Trino
@@ -280,30 +266,26 @@ Destroy all resources:
 pulumi destroy --yes --stack dev
 ```
 
-Delete the Kind cluster:
-
-```bash
-kind delete cluster --name trino
-```
+**Note**: The local cluster is shared with other services and should not be deleted.
 
 ## Troubleshooting
 
 ### Check pod status
 
 ```bash
-kubectl get pods -n trino
+kubectl get pods -n trino --context kind-local
 ```
 
 ### View logs
 
 ```bash
-kubectl logs -n trino deployment/nessie
-kubectl logs -n trino deployment/postgres
+kubectl logs -n trino deployment/nessie --context kind-local
+kubectl logs -n trino deployment/postgres --context kind-local
 ```
 
 ### Restart a deployment
 
 ```bash
-kubectl rollout restart deployment/nessie -n trino
+kubectl rollout restart deployment/nessie -n trino --context kind-local
 ```
 
