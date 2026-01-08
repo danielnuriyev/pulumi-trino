@@ -40,6 +40,7 @@ pg_deploy = k8s.apps.v1.Deployment(
                             k8s.core.v1.EnvVarArgs(name="POSTGRES_USER", value=pg_user),
                             k8s.core.v1.EnvVarArgs(name="POSTGRES_PASSWORD", value=pg_pass),
                             k8s.core.v1.EnvVarArgs(name="POSTGRES_DB", value=pg_db),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRES_HOST_AUTH_METHOD", value="trust"),
                         ],
                     )
                 ],

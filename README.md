@@ -87,12 +87,17 @@ pulumi stack init dev
 
 Before deploying, you must set passwords for MinIO and PostgreSQL. These are stored as encrypted secrets in `Pulumi.dev.yaml`.
 
-```bash
-# Set MinIO root password (used for S3-compatible object storage)
-pulumi config set --secret minioPassword "your-minio-password"
+**Important Requirements:**
+- PostgreSQL **does not accept empty passwords** by default (requires `POSTGRES_HOST_AUTH_METHOD=trust`)
+- MinIO password **cannot be empty** because Trino's Iceberg connector requires valid S3 credentials
+- Use non-empty passwords for reliable deployment
 
-# Set PostgreSQL password (used by Hive Metastore for metadata storage)
-pulumi config set --secret pgPassword "your-postgres-password"
+```bash
+# Set MinIO root password (REQUIRED - cannot be empty)
+pulumi config set --secret minioPassword "minioadmin"
+
+# Set PostgreSQL password (REQUIRED - cannot be empty)
+pulumi config set --secret pgPassword "postgres"
 ```
 
 To verify your secrets are set:
@@ -103,11 +108,40 @@ pulumi config
 
 You should see `minioPassword` and `pgPassword` listed as `[secret]`.
 
+**Alternative Configuration:**
+The deployment includes PostgreSQL trust authentication to support flexible password policies, but production deployments should use strong passwords.
+
+**Current Working Configuration:**
+- MinIO Password: `minioadmin`
+- PostgreSQL Password: `postgres`
+
 ## Deploy
 
 ```bash
 pulumi up --yes --stack dev
 ```
+
+## Architecture Details
+
+### PostgreSQL Configuration
+- Uses trust authentication (`POSTGRES_HOST_AUTH_METHOD=trust`) to allow password-less connections
+- Required because the deployment needs to work with various password configurations
+- Stores metadata for both Hive Metastore and Nessie
+
+### MinIO Configuration
+- S3-compatible object storage for Iceberg data files
+- Credentials are shared with Trino for seamless S3 access
+- Includes a default bucket named "warehouse"
+
+### Nessie Configuration
+- Uses PostgreSQL as backend storage for version metadata
+- Provides Git-like branching and versioning for Iceberg tables
+- Integrated with Trino as the primary catalog
+
+### Trino Configuration
+- Iceberg catalog type: `nessie`
+- S3 endpoint: Internal MinIO service
+- Coordinator + 3 workers for distributed processing
 
 ## Access Services
 
@@ -266,9 +300,52 @@ Destroy all resources:
 pulumi destroy --yes --stack dev
 ```
 
-**Note**: The local cluster is shared with other services and should not be deleted.
+Delete the trino namespace:
+
+```bash
+kubectl delete namespace trino --context kind-local
+```
+
+**Note**: The local kind cluster is shared with other services and should not be deleted.
 
 ## Troubleshooting
+
+### Deployment Issues
+
+#### PostgreSQL fails to start with "Database is uninitialized and superuser password is not specified"
+**Problem:** PostgreSQL refuses empty passwords by default.
+**Solution:** Set a non-empty PostgreSQL password:
+```bash
+pulumi config set --secret pgPassword "postgres"
+pulumi up --yes --stack dev
+```
+
+#### Trino pods crash with "Secret access key cannot be blank"
+**Problem:** MinIO password is empty, but Trino's Iceberg connector requires valid S3 credentials.
+**Solution:** Set a non-empty MinIO password:
+```bash
+pulumi config set --secret minioPassword "minioadmin"
+pulumi up --yes --stack dev
+```
+
+#### Pulumi reports "resource not found" or update conflicts
+**Problem:** Stack state is out of sync from previous failed deployments.
+**Solution:** Reset the stack:
+```bash
+pulumi stack rm dev --force --yes
+pulumi stack init dev
+# Re-set your secrets
+pulumi up --yes --stack dev
+```
+
+#### Helm timeout during Trino deployment
+**Problem:** Trino Helm release times out during initial deployment.
+**Solution:** The deployment may still succeed. Check pod status:
+```bash
+kubectl get pods -n trino --context kind-local
+```
+
+### Runtime Issues
 
 ### Check pod status
 
@@ -281,11 +358,13 @@ kubectl get pods -n trino --context kind-local
 ```bash
 kubectl logs -n trino deployment/nessie --context kind-local
 kubectl logs -n trino deployment/postgres --context kind-local
+kubectl logs -n trino deployment/trino-coordinator --context kind-local
 ```
 
 ### Restart a deployment
 
 ```bash
 kubectl rollout restart deployment/nessie -n trino --context kind-local
+kubectl rollout restart deployment/postgres -n trino --context kind-local
 ```
 
