@@ -146,14 +146,16 @@ pulumi up --yes --stack dev
 ## Access Services
 
 **Direct NodePort Access** (when Kind cluster port mappings work):
-| Service | URL | Notes |
-|---------|-----|-------|
-| Trino UI | http://localhost:8080 | Via NodePort 30080 |
-| Nessie UI | http://localhost:19120 | Via NodePort 19120 |
-| MinIO API | http://localhost:9000 | Via NodePort 30900 |
-| MinIO Console | http://localhost:9001 | Via NodePort 30901 |
+| Service | URL | Status |
+|---------|-----|--------|
+| Trino UI | http://localhost:8080 |  |
+| Nessie UI | http://localhost:19120 |  |
+| MinIO API | http://localhost:9000 |  |
+| MinIO Console | http://localhost:9001 |  |
 
-**Port Forwarding** (recommended for reliable access): See below for commands.
+**Port Forwarding** (recommended - always works): See below for commands.
+
+**⚠️ Port Conflicts:** Docker Desktop uses both ports 9000 (Container Station) and 9001 (ETL Service Manager), blocking direct access to MinIO's NodePort mappings.
 
 ### Port Forward to Services
 
@@ -199,14 +201,28 @@ Then open http://localhost:8080 in your browser.
 kubectl port-forward -n trino svc/nessie 19120:19120 --context kind-local
 ```
 
+#### Port Forward to MinIO API
+
+```bash
+# Find the correct MinIO API service name (usually minio-<random-id>)
+kubectl get services -n trino --context kind-local | grep minio
+
+# Port-forward the API service (example with actual service name)
+kubectl port-forward -n trino svc/minio-adf72f43 9000:9000 --context kind-local
+```
+
 #### Port Forward to MinIO Console
 
 ```bash
 # Find the correct MinIO console service name (usually minio-<random-id>-console)
 kubectl get services -n trino --context kind-local | grep minio
 
-# Port-forward the service (example with actual service name)
-kubectl port-forward -n trino svc/minio-ec2bcee8-console 9001:9001 --context kind-local
+# Port-forward the console service (example with actual service name)
+kubectl port-forward -n trino svc/minio-adf72f43-console 9001:9001 --context kind-local
+
+# Alternative: Use a different local port if 9001 conflicts
+kubectl port-forward -n trino svc/minio-adf72f43-console 9091:9001 --context kind-local
+# Then access http://localhost:9091
 ```
 
 ### Connect to Trino
@@ -326,6 +342,23 @@ pulumi up --yes --stack dev
 ```bash
 pulumi config set --secret minioPassword "minioadmin"
 pulumi up --yes --stack dev
+```
+
+#### Cannot access MinIO API on localhost:9000
+**Problem:** Docker Desktop uses port 9000 for its Container Station service.
+**Solution:** Use port forwarding instead:
+```bash
+kubectl port-forward -n trino svc/minio-adf72f43 9000:9000 --context kind-local
+# Then access http://localhost:9000
+```
+
+#### Cannot access MinIO Console on localhost:9001
+**Problem:** Docker Desktop uses port 9001 for its ETL Service Manager.
+**Solution:** Use port forwarding instead:
+```bash
+kubectl port-forward -n trino svc/minio-adf72f43-console 9001:9001 --context kind-local
+# Then access http://localhost:9001
+# Username: admin, Password: minioadmin
 ```
 
 #### Pulumi reports "resource not found" or update conflicts
