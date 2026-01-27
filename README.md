@@ -89,20 +89,17 @@ pulumi stack init dev
 
 Before deploying, you must set passwords for MinIO and PostgreSQL. These are stored as encrypted secrets in `Pulumi.dev.yaml`.
 
-If no values are set, the following defaults are used:
-- **MinIO Root User**: `admin`
-- **MinIO Root Password**: `minioadmin`
-- **PostgreSQL User**: `metastore`
-- **PostgreSQL Password**: `metastore`
-
-To use custom passwords instead:
+**Important Requirements:**
+- PostgreSQL **does not accept empty passwords** by default (requires `POSTGRES_HOST_AUTH_METHOD=trust`)
+- MinIO password **cannot be empty** because Trino's Iceberg connector requires valid S3 credentials
+- Use non-empty passwords for reliable deployment
 
 ```bash
-# Set MinIO root password (used for S3-compatible object storage)
-pulumi config set --secret minioPassword "your-minio-password"
+# Set MinIO root password (REQUIRED - cannot be empty)
+pulumi config set --secret minioPassword "minioadmin"
 
-# Set PostgreSQL password (used by Hive Metastore for metadata storage)
-pulumi config set --secret pgPassword "your-postgres-password"
+# Set PostgreSQL password (REQUIRED - cannot be empty)
+pulumi config set --secret pgPassword "postgres"
 ```
 
 To verify your secrets are set:
@@ -113,6 +110,13 @@ pulumi config
 
 You should see `minioPassword` and `pgPassword` listed as `[secret]` if custom values were set.
 
+**Alternative Configuration:**
+The deployment includes PostgreSQL trust authentication to support flexible password policies, but production deployments should use strong passwords.
+
+**Current Working Configuration:**
+- MinIO Password: `minioadmin`
+- PostgreSQL Password: `postgres`
+
 ## Deploy
 
 ```bash
@@ -121,32 +125,41 @@ pulumi up --yes --stack dev
 
 Once deployment completes (typically 2-3 minutes), all services will be running and ready to use.
 
-## Deployment Status
+## Architecture Details
 
-After a successful deployment, you should see all pods in the `Running` state:
+### PostgreSQL Configuration
+- Uses trust authentication (`POSTGRES_HOST_AUTH_METHOD=trust`) to allow password-less connections
+- Required because the deployment needs to work with various password configurations
+- Stores metadata for both Hive Metastore and Nessie
 
-```bash
-kubectl get pods -n trino --context kind-local
-```
+### MinIO Configuration
+- S3-compatible object storage for Iceberg data files
+- Credentials are shared with Trino for seamless S3 access
+- Includes a default bucket named "warehouse"
 
-Expected output:
-```
-NAME                                           READY   STATUS    RESTARTS   AGE
-postgres-xxxxx                                 1/1     Running   0          2m
-minio-xxxxx                                    1/1     Running   0          2m
-nessie-xxxxx                                   1/1     Running   0          2m
-hive-metastore-xxxxx                           1/1     Running   0          2m
-trino-xxxxxxx-trino-coordinator-xxxxx          1/1     Running   0          52s
-trino-xxxxxxx-trino-worker-xxxxx               1/1     Running   0          52s
-trino-xxxxxxx-trino-worker-xxxxx               1/1     Running   0          52s
-trino-xxxxxxx-trino-worker-xxxxx               1/1     Running   0          52s
-```
+### Nessie Configuration
+- Uses PostgreSQL as backend storage for version metadata
+- Provides Git-like branching and versioning for Iceberg tables
+- Integrated with Trino as the primary catalog
+
+### Trino Configuration
+- Iceberg catalog type: `nessie`
+- S3 endpoint: Internal MinIO service
+- Coordinator + 3 workers for distributed processing
 
 ## Access Services
 
-After deployment, all services are accessible using the following URLs and credentials:
+**Direct NodePort Access** (when Kind cluster port mappings work):
+| Service | URL | Status |
+|---------|-----|--------|
+| Trino UI | http://localhost:8080 |  |
+| Nessie UI | http://localhost:19120 |  |
+| MinIO API | http://localhost:9000 |  |
+| MinIO Console | http://localhost:9001 |  |
 
-### Accessing Services with Port Forward
+**Port Forwarding** (recommended - always works): See below for commands.
+
+**⚠️ Port Conflicts:** Docker Desktop uses both ports 9000 (Container Station) and 9001 (ETL Service Manager), blocking direct access to MinIO's NodePort mappings.
 
 For more stable and reliable access, especially to Nessie which doesn't expose a NodePort by default:
 
@@ -156,6 +169,27 @@ kubectl port-forward -n trino svc/nessie 19120:19120 --context kind-local
 ```
 
 Then open http://localhost:19120 in your browser.
+
+#### Port Forward to MinIO API
+
+```bash
+# Find the correct MinIO API service name (usually minio-<random-id>)
+kubectl get services -n trino --context kind-local | grep minio
+
+# Port-forward the API service (example with actual service name)
+kubectl port-forward -n trino svc/minio-adf72f43 9000:9000 --context kind-local
+```
+
+#### Port Forward to MinIO Console
+
+```bash
+# Port-forward the console service (example with actual service name)
+kubectl port-forward -n trino svc/minio-adf72f43-console 9001:9001 --context kind-local
+
+# Alternative: Use a different local port if 9001 conflicts
+kubectl port-forward -n trino svc/minio-adf72f43-console 9091:9001 --context kind-local
+# Then access http://localhost:9091
+```
 
 **Trino UI:**
 ```bash
@@ -270,9 +304,69 @@ Destroy all resources:
 pulumi destroy --yes --stack dev
 ```
 
-**Note**: The local cluster is shared with other services and should not be deleted.
+Delete the trino namespace:
+
+```bash
+kubectl delete namespace trino --context kind-local
+```
+
+**Note**: The local kind cluster is shared with other services and should not be deleted.
 
 ## Troubleshooting
+
+### Deployment Issues
+
+#### PostgreSQL fails to start with "Database is uninitialized and superuser password is not specified"
+**Problem:** PostgreSQL refuses empty passwords by default.
+**Solution:** Set a non-empty PostgreSQL password:
+```bash
+pulumi config set --secret pgPassword "postgres"
+pulumi up --yes --stack dev
+```
+
+#### Trino pods crash with "Secret access key cannot be blank"
+**Problem:** MinIO password is empty, but Trino's Iceberg connector requires valid S3 credentials.
+**Solution:** Set a non-empty MinIO password:
+```bash
+pulumi config set --secret minioPassword "minioadmin"
+pulumi up --yes --stack dev
+```
+
+#### Cannot access MinIO API on localhost:9000
+**Problem:** Docker Desktop uses port 9000 for its Container Station service.
+**Solution:** Use port forwarding instead:
+```bash
+kubectl port-forward -n trino svc/minio-adf72f43 9000:9000 --context kind-local
+# Then access http://localhost:9000
+```
+
+#### Cannot access MinIO Console on localhost:9001
+**Problem:** Docker Desktop uses port 9001 for its ETL Service Manager.
+**Solution:** Use port forwarding instead:
+```bash
+kubectl port-forward -n trino svc/minio-adf72f43-console 9001:9001 --context kind-local
+# Then access http://localhost:9001
+# Username: admin, Password: minioadmin
+```
+
+#### Pulumi reports "resource not found" or update conflicts
+**Problem:** Stack state is out of sync from previous failed deployments.
+**Solution:** Reset the stack:
+```bash
+pulumi stack rm dev --force --yes
+pulumi stack init dev
+# Re-set your secrets
+pulumi up --yes --stack dev
+```
+
+#### Helm timeout during Trino deployment
+**Problem:** Trino Helm release times out during initial deployment.
+**Solution:** The deployment may still succeed. Check pod status:
+```bash
+kubectl get pods -n trino --context kind-local
+```
+
+### Runtime Issues
 
 ### Check pod status
 
@@ -286,6 +380,7 @@ kubectl get pods -n trino --context kind-local
 kubectl logs -n trino deployment/nessie --context kind-local
 kubectl logs -n trino deployment/postgres --context kind-local
 kubectl logs -n trino deployment/hive-metastore --context kind-local
+kubectl logs -n trino deployment/trino-coordinator --context kind-local
 ```
 
 ### Check init container status
@@ -305,6 +400,7 @@ kubectl logs -n trino <pod-name> -c <init-container-name> --context kind-local
 ```bash
 kubectl rollout restart deployment/nessie -n trino --context kind-local
 kubectl rollout restart deployment/hive-metastore -n trino --context kind-local
+kubectl rollout restart deployment/postgres -n trino --context kind-local
 ```
 
 ### Trino pods crashing or in CrashLoopBackOff

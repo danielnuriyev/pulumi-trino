@@ -49,10 +49,10 @@ pg_deploy = k8s.apps.v1.Deployment(
                         image="bitnami/postgresql:latest",
                         ports=[k8s.core.v1.ContainerPortArgs(container_port=5432)],
                         env=[
-                            k8s.core.v1.EnvVarArgs(name="POSTGRESQL_USERNAME", value=pg_user),
-                            k8s.core.v1.EnvVarArgs(name="POSTGRESQL_PASSWORD", value=pg_pass),
-                            k8s.core.v1.EnvVarArgs(name="POSTGRESQL_DATABASE", value=pg_db),
-                            k8s.core.v1.EnvVarArgs(name="ALLOW_EMPTY_PASSWORD", value="yes"),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRES_USER", value=pg_user),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRES_PASSWORD", value=pg_pass),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRES_DB", value=pg_db),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRES_HOST_AUTH_METHOD", value="trust"),
                         ],
                     )
                 ],
