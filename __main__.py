@@ -7,14 +7,26 @@ ns_name = cfg.get("namespace") or "trino"
 ns = k8s.core.v1.Namespace("ns", metadata={"name": ns_name})
 
 minio_user = cfg.get("minioUser") or "admin"
-minio_pass = cfg.require_secret("minioPassword")
+minio_pass = cfg.get("minioPassword") or "minioadmin"
 
 pg_user = cfg.get("pgUser") or "metastore"
-pg_pass = cfg.require_secret("pgPassword")
+pg_pass = cfg.get("pgPassword") or "metastore"
 pg_db   = cfg.get("pgDb") or "metastore"
 
 # Namespace is created manually
 # ns = k8s.core.v1.Namespace("ns", metadata={"name": ns_name})
+
+# Secret for PostgreSQL credentials
+pg_secret = k8s.core.v1.Secret(
+    "pg-secret",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="postgres-secret",
+        namespace=ns_name,
+    ),
+    string_data={
+        "postgres-password": pg_pass,
+    },
+)
 
 # --- Standalone PostgreSQL with md5 auth for Hive Metastore ---
 pg_deploy = k8s.apps.v1.Deployment(
@@ -34,12 +46,13 @@ pg_deploy = k8s.apps.v1.Deployment(
                 containers=[
                     k8s.core.v1.ContainerArgs(
                         name="postgres",
-                        image="postgres:17-alpine",
+                        image="bitnami/postgresql:latest",
                         ports=[k8s.core.v1.ContainerPortArgs(container_port=5432)],
                         env=[
-                            k8s.core.v1.EnvVarArgs(name="POSTGRES_USER", value=pg_user),
-                            k8s.core.v1.EnvVarArgs(name="POSTGRES_PASSWORD", value=pg_pass),
-                            k8s.core.v1.EnvVarArgs(name="POSTGRES_DB", value=pg_db),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRESQL_USERNAME", value=pg_user),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRESQL_PASSWORD", value=pg_pass),
+                            k8s.core.v1.EnvVarArgs(name="POSTGRESQL_DATABASE", value=pg_db),
+                            k8s.core.v1.EnvVarArgs(name="ALLOW_EMPTY_PASSWORD", value="yes"),
                         ],
                     )
                 ],
@@ -58,7 +71,7 @@ pg_svc = k8s.core.v1.Service(
         selector={"app": "postgres"},
         ports=[k8s.core.v1.ServicePortArgs(port=5432, target_port=5432)],
     ),
-    opts=pulumi.ResourceOptions(depends_on=[pg_deploy]),
+    opts=pulumi.ResourceOptions(depends_on=[pg_deploy, pg_secret]),
 )
 
 # --- MinIO (Official) ---
@@ -237,8 +250,8 @@ hms_deploy = k8s.apps.v1.Deployment(
                     # Wait for PostgreSQL to be ready
                     k8s.core.v1.ContainerArgs(
                         name="wait-for-postgres",
-                        image="busybox:1.37",
-                        command=["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done;"],
+                        image="bitnami/postgresql:latest",
+                        command=["sh", "-c", f"until (echo > /dev/tcp/postgres/5432) >/dev/null 2>&1; do echo 'Waiting for postgres...'; sleep 2; done; echo 'PostgreSQL is ready!'"],
                     ),
                 ],
                 containers=[
@@ -382,8 +395,8 @@ nessie_deploy = k8s.apps.v1.Deployment(
                     # Wait for PostgreSQL to be ready
                     k8s.core.v1.ContainerArgs(
                         name="wait-for-postgres",
-                        image="busybox:1.37",
-                        command=["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done;"],
+                        image="bitnami/postgresql:latest",
+                        command=["sh", "-c", f"until (echo > /dev/tcp/postgres/5432) >/dev/null 2>&1; do echo 'Waiting for postgres...'; sleep 2; done; echo 'PostgreSQL is ready!'"],
                     ),
                 ],
                 containers=[

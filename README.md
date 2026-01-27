@@ -12,7 +12,13 @@ The deployment uses Nessie as the Iceberg catalog with Git-like versioning capab
 
 ## Prerequisites
 
-### 1. Install Homebrew (macOS)
+### 1. Install Docker Desktop
+
+Download and install from [docker.com](https://www.docker.com/products/docker-desktop/)
+
+Configure Docker Resources to have 4 CPUs, 8GB of memory, 2GB of swap.
+
+### 2. Install Homebrew (macOS)
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -20,33 +26,13 @@ echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 eval "$(/opt/homebrew/bin/brew shellenv)"
 ```
 
-### 2. Install Docker Desktop
-
-Download and install from [docker.com](https://www.docker.com/products/docker-desktop/)
-
 ### 3. Install Required Tools
 
 ```bash
 brew install kind kubectl helm pulumi uv
 ```
 
-### 4. Configure Pulumi for Local State
-
-```bash
-pulumi login file://~
-```
-
-This stores Pulumi state locally instead of in Pulumi Cloud.
-
-Set your Pulumi passphrase as an environment variable (add to your `~/.zshrc` or `~/.bashrc`):
-
-```bash
-export PULUMI_CONFIG_PASSPHRASE="your-secure-passphrase"
-```
-
-This passphrase encrypts your Pulumi secrets. Use the same passphrase consistently.
-
-### 5. Create the Kind Cluster
+### 4. Create the Kind Cluster
 
 This project deploys to the shared `local` kind cluster. Make sure it's running:
 
@@ -68,6 +54,22 @@ If the cluster doesn't exist, create it using the configuration from the parent 
 kind create cluster --config kind-config.yaml
 ```
 
+### 5. Configure Pulumi for Local State
+
+```bash
+pulumi login file://~
+```
+
+This stores Pulumi state locally instead of in Pulumi Cloud.
+
+Set your Pulumi passphrase as an environment variable (add to your `~/.zshrc` or `~/.bashrc`):
+
+```bash
+export PULUMI_CONFIG_PASSPHRASE=""
+```
+
+This passphrase encrypts your Pulumi secrets. For local development, an empty passphrase is acceptable.
+
 ### 6. Install Python Dependencies
 
 ```bash
@@ -87,6 +89,14 @@ pulumi stack init dev
 
 Before deploying, you must set passwords for MinIO and PostgreSQL. These are stored as encrypted secrets in `Pulumi.dev.yaml`.
 
+If no values are set, the following defaults are used:
+- **MinIO Root User**: `admin`
+- **MinIO Root Password**: `minioadmin`
+- **PostgreSQL User**: `metastore`
+- **PostgreSQL Password**: `metastore`
+
+To use custom passwords instead:
+
 ```bash
 # Set MinIO root password (used for S3-compatible object storage)
 pulumi config set --secret minioPassword "your-minio-password"
@@ -101,7 +111,7 @@ To verify your secrets are set:
 pulumi config
 ```
 
-You should see `minioPassword` and `pgPassword` listed as `[secret]`.
+You should see `minioPassword` and `pgPassword` listed as `[secret]` if custom values were set.
 
 ## Deploy
 
@@ -109,71 +119,65 @@ You should see `minioPassword` and `pgPassword` listed as `[secret]`.
 pulumi up --yes --stack dev
 ```
 
+Once deployment completes (typically 2-3 minutes), all services will be running and ready to use.
+
+## Deployment Status
+
+After a successful deployment, you should see all pods in the `Running` state:
+
+```bash
+kubectl get pods -n trino --context kind-local
+```
+
+Expected output:
+```
+NAME                                           READY   STATUS    RESTARTS   AGE
+postgres-xxxxx                                 1/1     Running   0          2m
+minio-xxxxx                                    1/1     Running   0          2m
+nessie-xxxxx                                   1/1     Running   0          2m
+hive-metastore-xxxxx                           1/1     Running   0          2m
+trino-xxxxxxx-trino-coordinator-xxxxx          1/1     Running   0          52s
+trino-xxxxxxx-trino-worker-xxxxx               1/1     Running   0          52s
+trino-xxxxxxx-trino-worker-xxxxx               1/1     Running   0          52s
+trino-xxxxxxx-trino-worker-xxxxx               1/1     Running   0          52s
+```
+
 ## Access Services
 
-**Direct NodePort Access** (when Kind cluster port mappings work):
-| Service | URL | Notes |
-|---------|-----|-------|
-| Trino UI | http://localhost:8080 | Via NodePort 30080 |
-| Nessie UI | http://localhost:19120 | Via NodePort 19120 |
-| MinIO API | http://localhost:9000 | Via NodePort 30900 |
-| MinIO Console | http://localhost:9001 | Via NodePort 30901 |
+After deployment, all services are accessible using the following URLs and credentials:
 
-**Port Forwarding** (recommended for reliable access): See below for commands.
+### Accessing Services with Port Forward
 
-### Port Forward to Services
+For more stable and reliable access, especially to Nessie which doesn't expose a NodePort by default:
 
-Helm releases automatically prefix service names with the release name. To find the correct service names, run:
-
-```bash
-kubectl get services -n trino --context kind-local
-```
-
-Example output:
-```
-NAME                          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
-hive-metastore                ClusterIP   10.96.230.58    <none>        9083/TCP         22m
-minio-ec2bcee8                NodePort    10.96.86.91     <none>        9000:30900/TCP   55m
-minio-ec2bcee8-console        NodePort    10.96.162.184   <none>        9001:30901/TCP   55m
-nessie                        ClusterIP   10.96.26.56     <none>        19120/TCP        22m
-postgres                      ClusterIP   10.96.240.155   <none>        5432/TCP         55m
-trino-0a966bea-trino          NodePort    10.96.48.115    <none>        8080:30080/TCP   22m
-```
-
-This shows services like:
-- `trino-<release-name>-trino` (for Trino coordinator, e.g., `trino-0a966bea-trino`)
-- `minio-<release-name>-console` (for MinIO Console, e.g., `minio-ec2bcee8-console`)
-- `nessie` (for Nessie - no prefix since it's deployed directly, not via Helm)
-
-#### Port Forward to Trino UI
-
-If the NodePort mappings aren't working or you need direct access to the Trino coordinator:
-
-```bash
-# Find the correct Trino service name (usually trino-<random-id>-trino)
-kubectl get services -n trino --context kind-local | grep trino
-
-# Port-forward the service (example with actual service name)
-kubectl port-forward -n trino svc/trino-0a966bea-trino 8080:8080 --context kind-local
-```
-
-Then open http://localhost:8080 in your browser.
-
-#### Port Forward to Nessie UI
-
+**Nessie UI:**
 ```bash
 kubectl port-forward -n trino svc/nessie 19120:19120 --context kind-local
 ```
 
-#### Port Forward to MinIO Console
+Then open http://localhost:19120 in your browser.
 
+**Trino UI:**
 ```bash
-# Find the correct MinIO console service name (usually minio-<random-id>-console)
-kubectl get services -n trino --context kind-local | grep minio
+# Find the Trino service name
+kubectl get svc -n trino --context kind-local | grep "trino.*NodePort"
 
-# Port-forward the service (example with actual service name)
-kubectl port-forward -n trino svc/minio-ec2bcee8-console 9001:9001 --context kind-local
+# Port-forward to it (example service name)
+kubectl port-forward -n trino svc/trino-xxxxx-trino 8080:8080 --context kind-local
 ```
+
+Then open http://localhost:8080 in your browser and use `admin` as the password.
+
+**MinIO Console:**
+```bash
+# Find the MinIO console service name
+kubectl get svc -n trino --context kind-local | grep "minio.*console"
+
+# Port-forward to it (example service name)
+kubectl port-forward -n trino svc/minio-xxxxx-console 9001:9001 --context kind-local
+```
+
+Then open http://localhost:9001 in your browser. Login with `admin` / `minioadmin`.
 
 ### Connect to Trino
 
@@ -281,11 +285,95 @@ kubectl get pods -n trino --context kind-local
 ```bash
 kubectl logs -n trino deployment/nessie --context kind-local
 kubectl logs -n trino deployment/postgres --context kind-local
+kubectl logs -n trino deployment/hive-metastore --context kind-local
+```
+
+### Check init container status
+
+To debug init containers that are still initializing:
+
+```bash
+# Describe a specific pod to see init container status
+kubectl describe pod -n trino <pod-name> --context kind-local
+
+# View init container logs
+kubectl logs -n trino <pod-name> -c <init-container-name> --context kind-local
 ```
 
 ### Restart a deployment
 
 ```bash
 kubectl rollout restart deployment/nessie -n trino --context kind-local
+kubectl rollout restart deployment/hive-metastore -n trino --context kind-local
 ```
 
+### Trino pods crashing or in CrashLoopBackOff
+
+Trino requires significant memory. If Trino pods are crashing with `OOMKilled` or `CrashLoopBackOff`:
+
+1. Check available node resources:
+   ```bash
+   kubectl describe nodes --context kind-local
+   ```
+
+2. Check pod resource usage:
+   ```bash
+   kubectl top pods -n trino --context kind-local
+   ```
+
+3. If memory is constrained, you may need to:
+   - Reduce the number of Trino workers in the `__main__.py` configuration
+   - Allocate more resources to the Kind cluster
+   - Run on a machine with more available memory
+
+### PostgreSQL connection issues
+
+If Nessie or Hive Metastore pods fail to initialize with "Waiting for postgres" messages:
+
+1. Verify PostgreSQL is running:
+   ```bash
+   kubectl logs -n trino deployment/postgres --context kind-local
+   ```
+
+2. Test connection from another pod:
+   ```bash
+   kubectl run -it --rm debug --image=bitnami/postgresql:latest --restart=Never -n trino --context kind-local -- /opt/bitnami/postgresql/bin/pg_isready -h postgres -p 5432
+   ```
+
+3. Check PostgreSQL service:
+   ```bash
+   kubectl get svc -n trino postgres --context kind-local
+   kubectl describe svc -n trino postgres --context kind-local
+   ```
+
+## Deployment Summary
+
+This deployment creates a fully functional Trino data lake environment on Kubernetes with:
+
+✅ **PostgreSQL** - Metadata storage for Nessie and Hive Metastore  
+✅ **MinIO** - S3-compatible object storage with Iceberg support  
+✅ **Nessie** - Iceberg catalog server with Git-like versioning  
+✅ **Hive Metastore** - Additional metadata store for interoperability  
+✅ **Trino** - Distributed SQL query engine with 1 coordinator + 3 workers  
+
+### Default Credentials
+
+- **MinIO Console**: Username `admin` / Password `minioadmin`
+- **Trino**: No authentication (open access)
+- **Nessie**: No authentication (open access)
+- **PostgreSQL**: Username `metastore` / Password `metastore`
+
+### Known Issues
+
+- If Trino pods are crashing immediately after deployment, check the "Trino pods crashing" section in Troubleshooting above
+- The first deployment may take 2-3 minutes for all components to start up
+- Nessie requires TCP connectivity check during initialization; ensure networking is stable
+
+### Next Steps
+
+1. Access the Trino UI at http://localhost:8080
+2. Create schemas and tables using the Lakehouse catalog
+3. Use the Nessie CLI for advanced branching and versioning
+4. Monitor performance using kubectl logs and pod metrics
+
+For detailed Trino documentation, visit: https://trino.io/docs/
