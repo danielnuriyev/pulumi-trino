@@ -10,34 +10,20 @@ nodes:
       kubeletExtraArgs:
         node-labels: "ingress-ready=true"
   extraPortMappings:
-  # Minio
+  # Minio (Object Storage)
   - containerPort: 9000
     hostPort: 9000
     protocol: TCP
   - containerPort: 9001
     hostPort: 9001
     protocol: TCP
-  # Nessie
+  # Nessie (Iceberg Catalog)
   - containerPort: 19120
     hostPort: 19120
     protocol: TCP
-  # Trino
+  # Trino (Distributed SQL Query Engine)
   - containerPort: 8080
     hostPort: 8080
-    protocol: TCP
-  # Snowflake Emulator
-  - containerPort: 8081
-    hostPort: 8081
-    protocol: TCP
-  # Dagster
-  - containerPort: 3000
-    hostPort: 3000
-    protocol: TCP
-  - containerPort: 4000
-    hostPort: 4000
-    protocol: TCP
-  - containerPort: 4266
-    hostPort: 4266
     protocol: TCP
 # Worker nodes
 - role: worker
