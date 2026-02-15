@@ -1,7 +1,6 @@
 # Trino on Kubernetes with Pulumi
 
-Deploy Trino to local Kubernetes cluster created with `kind` using pulumi.
-The deployment uses Nessie as the Iceberg catalog with Git-like versioning capabilities, storing metadata in Postgres and files on S3 using MinIO.
+Deploy Trino to local Kubernetes cluster.
 
 ## Architecture
 
